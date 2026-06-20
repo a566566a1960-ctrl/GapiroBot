@@ -1,175 +1,108 @@
-import sqlite3, json, threading, time
-from collections import defaultdict, OrderedDict
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import threading
 
-# -----------------------------
-# 1. IDENTITY + IDEMPOTENCY LAYER (SAFE + TTL + CLEANUP)
-# -----------------------------
-class Idempotency:
-    def __init__(self, ttl=2, max_size=5000):
-        self.ttl = ttl
-        self.cache = OrderedDict()
-        self.lock = threading.Lock()
-        self.max_size = max_size
+BOT_TOKEN = "8750954453:AAFWL7XzhN27MXVLP4JAdGmyvNFYUkeJEuo"
+bot = telebot.TeleBot(BOT_TOKEN)
 
-    def check(self, uid, cid, action):
-        key = f"{uid}:{cid}:{action}"
-        now = time.time()
+games = {}
+GAME_CONFIG = {
+    "🎲 تاس": {"emoji": "🎲", "targets": {"تاس ۶": [6], "زوج": [2, 4, 6], "فرد": [1, 3, 5]}},
+    "🎰 کازینو": {"emoji": "🎰", "targets": {"۳ تا ۷": [64], "۳ تا انگور": [43], "۳ تا لیمو": [22], "۳ تا BAR": [1]}},
+    "🏀 بسکتبال": {"emoji": "🏀", "targets": {"گل قطعی (۵)": [5]}},
+    "🎯 دارت": {"emoji": "🎯", "targets": {"مرکز (۶)": [6]}}
+}
 
-        with self.lock:
-            # cleanup expired
-            expired = [k for k, t in self.cache.items() if now - t > self.ttl]
-            for k in expired:
-                del self.cache[k]
+def delete_later(cid, mid):
+    def delete():
+        try: bot.delete_message(cid, mid)
+        except: pass
+    threading.Timer(120, delete).start()
 
-            # bounded memory
-            if len(self.cache) > self.max_size:
-                self.cache.popitem(last=False)
+@bot.message_handler(commands=['help', 'help@Hamid_18bot'])
+def send_help(m):
+    text = "🎮 راهنمای گپیرو:\n/newgame برای شروع بازی.\nفقط سازنده اجازه تغییر تنظیمات و بازگشت را دارد."
+    msg = bot.reply_to(m, text)
+    delete_later(m.chat.id, msg.message_id)
 
-            if key in self.cache:
-                return False
+@bot.message_handler(commands=['newgame'])
+def handle_newgame(m):
+    if m.chat.type == 'private': return
+    cid = m.chat.id
+    games[cid] = {"creator": m.from_user.id, "game": None, "target": None, "win_values": [], 
+                  "players": [m.from_user.id], "player_names": {m.from_user.id: m.from_user.first_name}, 
+                  "status": "select_game", "turn_index": 0, "winners": []}
+    markup = InlineKeyboardMarkup(row_width=1)
+    for g in GAME_CONFIG: markup.add(InlineKeyboardButton(g, callback_data=f"type_{g}"))
+    bot.send_message(cid, "🎮 نوع استیکر را انتخاب کنید:", reply_markup=markup)
 
-            self.cache[key] = now
-            return True
+@bot.callback_query_handler(func=lambda call: True)
+def cb(call):
+    cid, uid = call.message.chat.id, call.from_user.id
+    data = call.data
+    if cid not in games: return
+    g = games[cid]
 
+    # بررسی امنیتی: فقط سازنده اجازه دسترسی به تنظیمات و بازگشت را دارد
+    if data in ["back_main", "back_target", "type_", "tgt_"] and uid != g["creator"]:
+        bot.answer_callback_query(call.id, "❌ فقط سازنده بازی اجازه تغییر تنظیمات را دارد!", show_alert=True)
+        return
 
-idempotency = Idempotency()
+    if data == "back_main":
+        m = InlineKeyboardMarkup(row_width=1)
+        for gn in GAME_CONFIG: m.add(InlineKeyboardButton(gn, callback_data=f"type_{gn}"))
+        bot.edit_message_text("🎮 نوع استیکر را انتخاب کنید:", cid, call.message.message_id, reply_markup=m)
+    
+    elif data == "back_target":
+        m = InlineKeyboardMarkup(row_width=1)
+        for t in GAME_CONFIG[g["game"]]["targets"]: m.add(InlineKeyboardButton(t, callback_data=f"tgt_{t}"))
+        m.add(InlineKeyboardButton("🔙 بازگشت به لیست بازی‌ها", callback_data="back_main"))
+        bot.edit_message_text("🎯 هدف را انتخاب کنید:", cid, call.message.message_id, reply_markup=m)
 
-# -----------------------------
-# 2. FSM (EVENT-DRIVEN, NOT JUST STATE MAP)
-# -----------------------------
-class FSM:
-    REG, PLAY, PAUSED, FINISHED, CANCELLED = range(5)
+    elif data.startswith("type_"):
+        g["game"] = data.split("_")[1]
+        m = InlineKeyboardMarkup(row_width=1)
+        for t in GAME_CONFIG[g["game"]]["targets"]: m.add(InlineKeyboardButton(t, callback_data=f"tgt_{t}"))
+        m.add(InlineKeyboardButton("🔙 بازگشت به لیست بازی‌ها", callback_data="back_main"))
+        bot.edit_message_text("🎯 هدف را انتخاب کنید:", cid, call.message.message_id, reply_markup=m)
 
-    transitions = {
-        REG: {"start": PLAY, "cancel": CANCELLED},
-        PLAY: {"pause": PAUSED, "finish": FINISHED},
-        PAUSED: {"resume": PLAY, "finish": FINISHED},
-    }
+    elif data.startswith("tgt_"):
+        g["target"] = data.split("_")[1]; g["win_values"] = GAME_CONFIG[g["game"]]["targets"][g["target"]]; g["status"] = "reg"
+        update_reg(cid, call.message.message_id)
 
-    @staticmethod
-    def can(current, event):
-        return event in FSM.transitions.get(current, {})
+    elif data == "join" and g["status"] == "reg" and len(g["players"]) < 5:
+        if uid not in g["players"]: g["players"].append(uid); g["player_names"][uid] = call.from_user.first_name
+        update_reg(cid, call.message.message_id)
 
-    @staticmethod
-    def next(current, event):
-        return FSM.transitions[current][event]
+    elif data == "start" and g["status"] == "reg":
+        if uid != g["creator"]: bot.answer_callback_query(call.id, "❌ فقط سازنده می‌تواند شروع کند!")
+        elif len(g["players"]) < 2: bot.answer_callback_query(call.id, "حداقل ۲ نفر!")
+        else: g["status"] = "play"; bot.edit_message_text(f"🚀 شروع بازی!\nنوبت: {g['player_names'][g['players'][0]]}", cid, call.message.message_id)
 
-# -----------------------------
-# 3. REPOSITORY (ATOMIC + SAFE READ-MODIFY-WRITE)
-# -----------------------------
-class Repository:
-    _lock = threading.Lock()
-    DB = "gapiro.db"
+def update_reg(cid, mid):
+    g = games[cid]
+    text = f"📝 لیست:\nبازی: {g['game']}\nهدف: {g['target']}\n\nبازیکنان:\n" + "\n".join([f"👤 {n}" for n in g['player_names'].values()])
+    m = InlineKeyboardMarkup(row_width=1)
+    m.add(InlineKeyboardButton("➕ ورود", callback_data="join"), InlineKeyboardButton("🚀 شروع", callback_data="start"), InlineKeyboardButton("🔙 بازگشت به انتخاب هدف", callback_data="back_target"))
+    bot.edit_message_text(text, cid, mid, reply_markup=m)
 
-    @classmethod
-    def get(cls, cid):
-        with sqlite3.connect(cls.DB, timeout=30) as conn:
-            conn.row_factory = sqlite3.Row
-            return conn.execute(
-                "SELECT * FROM games WHERE cid=?",
-                (cid,)
-            ).fetchone()
+@bot.message_handler(content_types=['dice'])
+def handle_dice(m):
+    cid = m.chat.id
+    if cid not in games or games[cid]["status"] != "play": return
+    g = games[cid]
+    if m.from_user.id != g["players"][g["turn_index"]] or m.dice.emoji != GAME_CONFIG[g["game"]]["emoji"]: return
+    
+    if m.dice.value in g["win_values"]:
+        g["winners"].append(g["player_names"][m.from_user.id])
+        bot.reply_to(m, "🎉 تبریک! منتظر بمانید.")
+        g["players"].remove(m.from_user.id)
+        if not g["players"]:
+            res = "🏁 پایان بازی! رتبه‌بندی:\n" + "\n".join([f"مقام {i+1}: {g['winners'][i] if i<len(g['winners']) else '---'}" for i in range(5)])
+            bot.send_message(cid, res); games.pop(cid, None); return
+    else: g["turn_index"] = (g["turn_index"] + 1) % len(g["players"])
+    msg = bot.send_message(cid, f"👉 نوبت: {g['player_names'][g['players'][g['turn_index']]]}")
+    delete_later(cid, msg.message_id)
 
-    @classmethod
-    def save(cls, state):
-        with cls._lock:
-            with sqlite3.connect(cls.DB, timeout=30) as conn:
-                conn.execute("PRAGMA journal_mode=WAL")
-
-                conn.execute("""
-                    INSERT INTO games (cid, status, players, player_names, turn_index, winners)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(cid) DO UPDATE SET
-                        status=excluded.status,
-                        players=excluded.players,
-                        player_names=excluded.player_names,
-                        turn_index=excluded.turn_index,
-                        winners=excluded.winners
-                """, (
-                    state["cid"],
-                    state["status"],
-                    json.dumps(state["players"]),
-                    json.dumps(state["names"]),
-                    state["turn"],
-                    json.dumps(state["winners"])
-                ))
-
-# -----------------------------
-# 4. GAME ENGINE (FULL SAFE LOGIC)
-# -----------------------------
-class GameEngine:
-
-    @staticmethod
-    def process_turn(state, uid, dice, win_targets):
-        players = state["players"]
-        turn = state["turn"]
-
-        # safety checks (anti-crash)
-        if not players or turn >= len(players):
-            state["turn"] = 0
-            return "INVALID_STATE", state
-
-        if players[turn] != uid:
-            return "NOT_YOUR_TURN", state
-
-        # WIN CONDITION
-        if dice in win_targets:
-            players.pop(turn)
-
-            if not players:
-                state["status"] = FSM.FINISHED
-                return "GAME_OVER", state
-
-            state["turn"] = turn % len(players)
-            return "WIN", state
-
-        # NEXT TURN
-        state["turn"] = (turn + 1) % len(players)
-        return "NEXT_TURN", state
-
-# -----------------------------
-# 5. DISPATCHER (FULL ENFORCEMENT LAYER)
-# -----------------------------
-def dispatch_action(uid, cid, action, payload):
-
-    # 1. idempotency gate
-    if not idempotency.check(uid, cid, action):
-        return "TOO_FAST"
-
-    # 2. load state
-    row = Repository.get(cid)
-    if not row:
-        return "GAME_NOT_FOUND"
-
-    state = {
-        "cid": cid,
-        "status": row["status"],
-        "players": json.loads(row["players"]),
-        "names": json.loads(row["player_names"]),
-        "turn": row["turn_index"],
-        "winners": json.loads(row["winners"])
-    }
-
-    # 3. FSM validation
-    if action in FSM.transitions.get(state["status"], {}):
-        new_status = FSM.next(state["status"], action)
-        state["status"] = new_status
-    elif action in ["dice"]:
-        pass
-    else:
-        return "INVALID_TRANSITION"
-
-    # 4. engine execution
-    if action == "dice":
-        result, state = GameEngine.process_turn(state, uid, payload["dice"])
-
-    # 5. persist
-    Repository.save(state)
-
-    return result
-
-# -----------------------------
-# 6. CLEAN BOT READY (integration point)
-# -----------------------------
-# bot handlers فقط این رو صدا می‌زنن:
-# dispatch_action(uid, cid, "dice", {"dice": value})
+bot.infinity_polling()
+    
