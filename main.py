@@ -4,7 +4,6 @@ import threading
 TOKEN = "8750954453:AAFWL7XzhN27MXVLP4JAdGmyvNFYUkeJEuo"
 bot = telebot.TeleBot(TOKEN)
 
-# دیتابیس حافظه
 games = {}
 
 def delete_later(cid, mid):
@@ -18,25 +17,23 @@ def handle_all_messages(m):
     cid = m.chat.id
     text = m.text if m.text else ""
     
-    # دستور ساخت بازی
     if text.startswith('/newgame'):
         games[cid] = {
+            "win_values": [6], # هدف اصلی بازی (عدد ۶)
             "players": [m.from_user.id], 
             "player_names": {m.from_user.id: m.from_user.first_name}, 
             "status": "reg", 
             "turn_index": 0, 
             "winners": []
         }
-        bot.reply_to(m, "✅ بازی ساخته شد. برای ورود دیگران /join و برای شروع /startgame را بزنید.")
+        bot.reply_to(m, "✅ بازی جدید ساخته شد. دیگران /join بزنند و سازنده /startgame را بزند.")
     
-    # دستور ورود به بازی
     elif text.startswith('/join') and cid in games and games[cid]["status"] == "reg":
         if m.from_user.id not in games[cid]["players"]:
             games[cid]["players"].append(m.from_user.id)
             games[cid]["player_names"][m.from_user.id] = m.from_user.first_name
             bot.reply_to(m, f"👤 {m.from_user.first_name} وارد شد.")
             
-    # دستور شروع بازی
     elif text.startswith('/startgame') and cid in games:
         games[cid]["status"] = "play"
         bot.reply_to(m, "🚀 بازی شروع شد! تاس بریزید.")
@@ -47,17 +44,17 @@ def handle_dice(m):
     if cid not in games or games[cid]["status"] != "play": return
     g = games[cid]
     
-    # باگ‌گیری: فقط نوبتِ بازیکن
+    # 1. اعتبارسنجی نوبت
     if m.from_user.id != g["players"][g["turn_index"]]: return
     
-    # باگ‌گیری: فقط تاس ۶ برنده است
-    if m.dice.value == 6:
+    # 2. بررسی دقیق برد (فقط عدد ۶)
+    if m.dice.value in g["win_values"]:
         winner_name = g["player_names"][m.from_user.id]
         g["winners"].append(winner_name)
-        g["players"].remove(m.from_user.id)
         
-        # تبریک فقط به برنده
-        bot.reply_to(m, "🎉 تبریک! شما بردید.")
+        # حذف بازیکن از دور بازی
+        g["players"].remove(m.from_user.id)
+        bot.reply_to(m, f"🎉 تبریک {winner_name}! شما بردید.")
         
         # اگر بازی تمام شد
         if not g["players"]:
@@ -66,13 +63,13 @@ def handle_dice(m):
             del games[cid]
             return
         
-        # تنظیم مجدد نوبت
+        # تنظیم مجدد ایندکس (نوبت ثابت می‌ماند چون بازیکن حذف شده)
         g["turn_index"] %= len(g["players"])
     else:
-        # اگر ۶ نبود، نوبت بعدی
+        # 3. فقط در صورت عدد نبودن هدف، نوبت را تغییر بده
         g["turn_index"] = (g["turn_index"] + 1) % len(g["players"])
     
-    # اعلام نوبت
+    # اعلام نوبت بعدی
     next_name = g["player_names"].get(g["players"][g["turn_index"]], "بازیکن")
     msg = bot.send_message(cid, f"👉 نوبت: {next_name}")
     delete_later(cid, msg.message_id)
