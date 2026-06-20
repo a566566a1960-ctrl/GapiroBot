@@ -91,3 +91,4 @@ def handle_dice(m):
     delete_later(cid, msg.message_id)
 
 bot.infinity_polling()
+    
