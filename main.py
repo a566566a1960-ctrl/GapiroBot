@@ -6,6 +6,7 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 games = {}
 
+# تنظیمات انواع بازی و اهداف برد
 GAME_CONFIG = {
     "🎲 تاس": {"emoji": "🎲", "custom_targets": {"🎲 تاس (فقط ۶)": [6], "🎲 زوج": [2, 4, 6], "🎲 فرد": [1, 3, 5]}},
     "🎰 کازینو": {"emoji": "🎰", "custom_targets": {"🎰 ۳ تا ۷": [64], "🍇 ۳ تا انگور": [43], "🍋 ۳ تا لیمو": [22], "🎰 ۳ تا BAR": [1]}},
@@ -16,16 +17,17 @@ GAME_CONFIG = {
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     if message.chat.type != 'private': return
+    # راهنمای کامل بازی
     text = (
         "🎮 **به ربات گپیرو (Gapiro) خوش آمدید!**\n\n"
         "📜 **راهنمای جامع بازی:**\n"
-        "۱. در گروه دستور `/newgame` را بزنید.\n"
-        "۲. نوع استیکر و شرط پیروزی (هدف) را انتخاب کنید.\n"
-        "۳. اعضا با دکمه «➕ پیوست» به بازی اضافه می‌شوند (۲ تا ۵ نفر).\n"
-        "۴. سازنده بازی را «🚀 شروع» می‌کند.\n"
-        "۵. هر بازیکن فقط در نوبت خود باید استیکر مربوطه را بفرستد.\n"
-        "۶. اولین کسی که به هدف بزند برنده است؛ بازی تا مشخص شدن تمام رتبه‌ها ادامه می‌یابد.\n\n"
-        "🔹 **پشتیبانی:** برای ارتباط با حمید از دکمه زیر استفاده کنید."
+        "۱. **ایجاد بازی:** در گروه دستور `/newgame` را بزنید.\n"
+        "۲. **تنظیمات:** نوع استیکر و شرط پیروزی (هدف) را انتخاب کنید.\n"
+        "۳. **ثبت‌نام:** اعضا با دکمه «➕ پیوست» به بازی اضافه می‌شوند (۲ تا ۵ نفر).\n"
+        "۴. **شروع:** سازنده دکمه «🚀 شروع» را می‌زند.\n"
+        "۵. **قوانین حرکت:** هر بازیکن فقط در نوبت خود باید استیکر مربوطه را بفرستد.\n"
+        "۶. **پیروزی:** اولین کسی که به هدف بزند برنده است. بازی تا مشخص شدن تمام رتبه‌ها ادامه می‌یابد.\n\n"
+        "🔹 **پشتیبانی:** برای ارتباط با ادمین از دکمه زیر استفاده کنید."
     )
     markup = InlineKeyboardMarkup()
     markup.add(InlineKeyboardButton("👨‍💻 پشتیبانی: Hamid_18", url="https://t.me/Hamid_18"))
@@ -61,7 +63,7 @@ def handle_type(call):
     games[chat_id]["game_type"] = g_name
     markup = InlineKeyboardMarkup()
     for t in GAME_CONFIG[g_name]["custom_targets"]: markup.add(InlineKeyboardButton(t, callback_data=f"tgt_{t}"))
-    markup.add(InlineKeyboardButton("🔙 بازگشت به منوی اصلی", callback_data="back_to_main"))
+    markup.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_to_main"))
     bot.edit_message_text("🎯 هدف برد را انتخاب کنید:", chat_id, call.message.message_id, reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("tgt_"))
@@ -122,3 +124,4 @@ def end_game(cid):
 
 print("گپیرو با تمام قابلیت‌ها روشن شد...")
 bot.infinity_polling()
+                                                        
