@@ -88,3 +88,4 @@ def handle_target(call):
 # [بخش هندلرهای بازی و Dice را مشابه قبل نگه دار]
 print("Gapiro v2.0 - Clean & Ready...")
 bot.infinity_polling()
+        
