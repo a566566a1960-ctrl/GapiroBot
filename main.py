@@ -19,14 +19,31 @@ def delete_later(cid, mid):
         except: pass
     threading.Timer(120, delete).start()
 
+# راهنمای پی‌وی (دقیق مطابق عکس)
+@bot.message_handler(commands=['start'])
+def send_welcome(m):
+    if m.chat.type == 'private':
+        text = ("🎮 به ربات گپیرو (Gapiro) خوش آمدید!\n\n"
+                "راهنمای جامع بازی:\n"
+                "۱. ایجاد بازی: در گروه دستور /newgame را بزنید.\n"
+                "۲. تنظیمات: نوع استیکر و شرط پیروزی را انتخاب کنید.\n"
+                "۳. ثبت‌نام: اعضا با دکمه پیوست به بازی اضافه می‌شوند (۲ تا ۵ نفر).\n"
+                "۴. شروع: سازنده دکمه شروع را می‌زند.\n"
+                "۵. قوانین حرکت: هر بازیکن فقط در نوبت خود باید استیکر مربوطه را بفرستد.\n"
+                "۶. پیروزی: اولین کسی که به هدف بزند برنده است. بازی تا مشخص شدن تمام رتبه‌ها ادامه می‌یابد.\n\n"
+                "پشتیبانی: برای ارتباط با ادمین از دکمه زیر استفاده کنید.")
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("پشتیبانی: Hamid_18", url="https://t.me/Hamid_18"))
+        bot.send_message(m.chat.id, text, reply_markup=markup)
+
 @bot.message_handler(commands=['help', 'help@Hamid_18bot'])
 def send_help(m):
-    text = "🎮 راهنمای گپیرو:\n/newgame برای شروع بازی.\nفقط سازنده اجازه تغییر تنظیمات و بازگشت را دارد."
-    msg = bot.reply_to(m, text)
+    msg = bot.reply_to(m, "راهنمای بازی: /newgame را در گروه بزنید.")
     delete_later(m.chat.id, msg.message_id)
 
 @bot.message_handler(commands=['newgame'])
 def handle_newgame(m):
+    if m.chat.type == 'private': return
     cid = m.chat.id
     games[cid] = {"creator": m.from_user.id, "game": None, "target": None, "win_values": [], 
                   "players": [m.from_user.id], "player_names": {m.from_user.id: m.from_user.first_name}, 
@@ -41,10 +58,10 @@ def cb(call):
     data = call.data
     if cid not in games: return
     g = games[cid]
-    is_group = call.message.chat.type != 'private'
-
-    if is_group and data in ["back_main", "back_target", "type_", "tgt_"] and uid != g["creator"]:
-        bot.answer_callback_query(call.id, "❌ فقط سازنده!", show_alert=True)
+    
+    # محدودیت سازنده فقط در گروه
+    if call.message.chat.type != 'private' and data in ["back_main", "back_target", "type_", "tgt_"] and uid != g["creator"]:
+        bot.answer_callback_query(call.id, "❌ فقط سازنده!")
         return
 
     if data == "back_main":
@@ -60,7 +77,7 @@ def cb(call):
         g["game"] = data.split("_")[1]
         m = InlineKeyboardMarkup(row_width=1)
         for t in GAME_CONFIG[g["game"]]["targets"]: m.add(InlineKeyboardButton(t, callback_data=f"tgt_{t}"))
-        m.add(InlineKeyboardButton("🔙 بازگشت به لیست", callback_data="back_main"))
+        m.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_main"))
         bot.edit_message_text("🎯 هدف را انتخاب کنید:", cid, call.message.message_id, reply_markup=m)
     elif data.startswith("tgt_"):
         g["target"] = data.split("_")[1]; g["win_values"] = GAME_CONFIG[g["game"]]["targets"][g["target"]]; g["status"] = "reg"
@@ -71,7 +88,7 @@ def cb(call):
     elif data == "start" and g["status"] == "reg":
         if uid != g["creator"]: bot.answer_callback_query(call.id, "❌ فقط سازنده!")
         elif len(g["players"]) < 2: bot.answer_callback_query(call.id, "حداقل ۲ نفر!")
-        else: g["status"] = "play"; bot.edit_message_text(f"🚀 شروع بازی!\nنوبت: {g['player_names'][g['players'][0]]}", cid, call.message.message_id)
+        else: g["status"] = "play"; bot.edit_message_text(f"🚀 شروع!\nنوبت: {g['player_names'][g['players'][0]]}", cid, call.message.message_id)
 
 def update_reg(cid, mid):
     g = games[cid]
@@ -86,7 +103,6 @@ def handle_dice(m):
     if cid not in games or games[cid]["status"] != "play": return
     g = games[cid]
     if m.from_user.id != g["players"][g["turn_index"]] or m.dice.emoji != GAME_CONFIG[g["game"]]["emoji"]: return
-    
     if m.dice.value in g["win_values"]:
         g["winners"].append(g["player_names"][m.from_user.id])
         bot.reply_to(m, "🎉 تبریک! منتظر بمانید.")
@@ -99,3 +115,4 @@ def handle_dice(m):
     delete_later(cid, msg.message_id)
 
 bot.infinity_polling()
+        
