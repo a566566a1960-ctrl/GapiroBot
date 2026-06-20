@@ -122,4 +122,3 @@ def end_game(cid):
 
 print("گپیرو با تمام قابلیت‌ها روشن شد...")
 bot.infinity_polling()
-    
