@@ -2,82 +2,263 @@ import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import threading
 
-TOKEN = "8750954453:AAFWL7XzhN27MXVLP4JAdGmyvNFYUkeJEuo"
-bot = telebot.TeleBot(TOKEN)
+BOT_TOKEN = "8750954453:AAFWL7XzhN27MXVLP4JAdGmyvNFYUkeJEuo"
+bot = telebot.TeleBot(BOT_TOKEN)
 
-# دیتابیسِ حافظه برای بازی‌های فعال
 games = {}
+lock = threading.Lock()
 
-# تنظیمات بازی
+# ---------------- GAME CONFIG (بدون تغییر UI) ----------------
 GAME_CONFIG = {
-    "🎲 تاس": {"emoji": "🎲", "targets": {"۶": [6]}},
-    "🏀 بسکتبال": {"emoji": "🏀", "targets": {"گل": [5]}}
+    "🎲 تاس": {"emoji": "🎲", "targets": {"تاس ۶": [6], "زوج": [2, 4, 6], "فرد": [1, 3, 5]}},
+    "🎰 کازینو": {"emoji": "🎰", "targets": {"۳ تا ۷": [7], "۳ تا انگور": [4], "۳ تا لیمو": [2], "۳ تا BAR": [1]}},
+    "🏀 بسکتبال": {"emoji": "🏀", "targets": {"گل قطعی (۵)": [5]}},
+    "🎯 دارت": {"emoji": "🎯", "targets": {"مرکز (۶)": [6]}}
 }
 
-def delete_later(cid, mid):
-    def delete():
-        try: bot.delete_message(cid, mid)
-        except: pass
-    threading.Timer(60, delete).start()
+# ---------------- HELP ----------------
+HELP_TEXT = """🎮 به ربات گپیرو (Gapiro) خوش آمدید!
 
-@bot.message_handler(func=lambda m: True)
-def handle_all_messages(m):
+راهنمای جامع بازی:
+۱. ایجاد بازی: در گروه دستور /newgame را بزنید.
+۲. تنظیمات: نوع استیکر و شرط پیروزی را انتخاب کنید.
+۳. ثبت‌نام: اعضا با دکمه پیوست به بازی اضافه می‌شوند (۲ تا ۵ نفر).
+۴. شروع: سازنده دکمه شروع را می‌زند.
+۵. قوانین حرکت: هر بازیکن فقط در نوبت خود باید استیکر مربوطه را بفرستد.
+۶. پیروزی: اولین کسی که به هدف بزند برنده است. بازی تا مشخص شدن تمام رتبه‌ها ادامه می‌یابد.
+
+پشتیبانی: @Hamid_18
+"""
+
+# ---------------- START / HELP ----------------
+@bot.message_handler(commands=['start', 'help'])
+def help_cmd(m):
+    bot.send_message(m.chat.id, HELP_TEXT)
+
+
+# ---------------- NEW GAME ----------------
+@bot.message_handler(commands=['newgame'])
+def newgame(m):
+    if m.chat.type == "private":
+        bot.send_message(m.chat.id, "❌ فقط داخل گروه")
+        return
+
     cid = m.chat.id
-    if not m.text: return
-    
-    if m.text.startswith('/newgame'):
+
+    with lock:
         games[cid] = {
-            "creator": m.from_user.id, "game": "🎲 تاس", "win_values": [6],
-            "players": [m.from_user.id], "player_names": {m.from_user.id: m.from_user.first_name}, 
-            "status": "reg", "turn_index": 0, "winners": [], "initial_count": 0
+            "creator": m.from_user.id,
+            "game": None,
+            "target": None,
+            "win_values": [],
+            "players": [],
+            "player_names": {},
+            "status": "reg",
+            "turn_index": 0,
+            "winners": [],
+            "initial_count": 0,
+            "menu_msg_id": None
         }
-        bot.reply_to(m, "✅ بازی جدید ساخته شد. اعضا وارد شوند و /startgame را بزنند.")
-    
-    elif m.text.startswith('/startgame') and cid in games:
-        games[cid]["status"] = "play"
-        games[cid]["initial_count"] = len(games[cid]["players"])
-        bot.reply_to(m, "🚀 بازی شروع شد! تاس بریزید.")
 
-    elif m.text.startswith('/join') and cid in games and games[cid]["status"] == "reg":
-        if m.from_user.id not in games[cid]["players"]:
-            games[cid]["players"].append(m.from_user.id)
-            games[cid]["player_names"][m.from_user.id] = m.from_user.first_name
-            bot.reply_to(m, f"👤 {m.from_user.first_name} وارد شد.")
+        games[cid]["players"].append(m.from_user.id)
+        games[cid]["player_names"][m.from_user.id] = m.from_user.first_name
 
-@bot.message_handler(content_types=['dice'])
-def handle_dice(m):
-    cid = m.chat.id
-    if cid not in games or games[cid]["status"] != "play": return
-    g = games[cid]
-    
-    # بررسی نوبت
-    if m.from_user.id != g["players"][g["turn_index"]]: return
-    
-    # بررسی برد
-    if m.dice.value in g["win_values"]:
-        winner_name = g["player_names"][m.from_user.id]
-        g["winners"].append(winner_name)
-        g["players"].remove(m.from_user.id)
-        
-        # ریپلای تبریک به برنده
-        bot.reply_to(m, "🎉 تبریک! شما بردید.")
-        
-        # اگر بازی تمام شد
-        if not g["players"]:
-            res = "🏁 پایان بازی! رتبه‌بندی:\n" + "\n".join([f"مقام {i+1}: {name}" for i, name in enumerate(g['winners'])])
-            bot.send_message(cid, res)
-            del games[cid]
+    kb = InlineKeyboardMarkup(row_width=1)
+    for g in GAME_CONFIG:
+        kb.add(InlineKeyboardButton(g, callback_data=f"type_{g}"))
+
+    msg = bot.send_message(cid, "🎮 نوع بازی را انتخاب کنید:", reply_markup=kb)
+    games[cid]["menu_msg_id"] = msg.message_id
+
+
+# ---------------- CALLBACK ----------------
+@bot.callback_query_handler(func=lambda call: True)
+def cb(call):
+    if not call.message:
+        return
+
+    cid = call.message.chat.id
+    uid = call.from_user.id
+    data = call.data
+
+    bot.answer_callback_query(call.id)
+
+    g = games.get(cid)
+    if not g:
+        return
+
+    # ---------------- BACK ----------------
+    if data == "back_home":
+        if uid != g["creator"]:
+            bot.answer_callback_query(call.id, "❌ فقط سازنده")
             return
-        
-        # اگر بازی ادامه دارد
-        g["turn_index"] %= len(g["players"])
-    else:
-        # نوبت بعدی
-        g["turn_index"] = (g["turn_index"] + 1) % len(g["players"])
-    
-    # اعلام نوبت
-    msg = bot.send_message(cid, f"👉 نوبت: {g['player_names'][g['players'][g['turn_index']]]}")
-    delete_later(cid, msg.message_id)
 
-print("Bot is ready...")
+        kb = InlineKeyboardMarkup(row_width=1)
+        for name in GAME_CONFIG:
+            kb.add(InlineKeyboardButton(name, callback_data=f"type_{name}"))
+
+        bot.edit_message_text("🎮 نوع بازی را انتخاب کنید:", cid, g["menu_msg_id"], reply_markup=kb)
+        return
+
+    # ---------------- SELECT GAME ----------------
+    if data.startswith("type_"):
+        with lock:
+            if g["status"] != "reg" or uid != g["creator"]:
+                return
+            game_name = data.split("_", 1)[1]
+            g["game"] = game_name
+
+        kb = InlineKeyboardMarkup()
+        for t in GAME_CONFIG[game_name]["targets"]:
+            kb.add(InlineKeyboardButton(t, callback_data=f"tgt_{t}"))
+        kb.add(InlineKeyboardButton("🔙 بازگشت", callback_data="back_home"))
+
+        bot.edit_message_text("🎯 هدف را انتخاب کنید:", cid, g["menu_msg_id"], reply_markup=kb)
+        return
+
+    # ---------------- TARGET ----------------
+    if data.startswith("tgt_"):
+        with lock:
+            if uid != g["creator"] or not g["game"]:
+                return
+
+            t = data.split("_", 1)[1]
+            g["target"] = t
+            g["win_values"] = GAME_CONFIG[g["game"]]["targets"][t]
+
+        update_reg(cid, g["menu_msg_id"])
+        return
+
+    # ---------------- JOIN ----------------
+    if data == "join":
+        with lock:
+            if uid in g["players"] or len(g["players"]) >= 5:
+                return
+            g["players"].append(uid)
+            g["player_names"][uid] = call.from_user.first_name
+
+        update_reg(cid, g["menu_msg_id"])
+        return
+
+    # ---------------- START ----------------
+    if data == "start":
+        with lock:
+            if uid != g["creator"]:
+                return
+
+            if len(g["players"]) < 2:
+                bot.answer_callback_query(call.id, "❌ حداقل ۲ نفر")
+                return
+
+            if not g["win_values"]:
+                bot.answer_callback_query(call.id, "❌ هدف انتخاب نشده")
+                return
+
+            g["status"] = "play"
+            g["turn_index"] = 0
+            g["initial_count"] = len(g["players"])
+
+        bot.edit_message_text(
+            f"🚀 بازی شروع شد!\n👉 نوبت: {g['player_names'][g['players'][0]]}",
+            cid,
+            g["menu_msg_id"]
+        )
+
+
+# ---------------- REGISTER MENU ----------------
+def update_reg(cid, mid):
+    g = games[cid]
+
+    text = "📝 ثبت‌نام\n\n" + "\n".join([f"👤 {n}" for n in g["player_names"].values()])
+
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton("➕ پیوستن", callback_data="join"),
+        InlineKeyboardButton("🚀 شروع", callback_data="start"),
+        InlineKeyboardButton("🔙 بازگشت", callback_data="back_home")
+    )
+
+    bot.edit_message_text(text, cid, mid, reply_markup=kb)
+
+
+# ---------------- DICE (FIXED 2P + 3-5P LOGIC) ----------------
+@bot.message_handler(content_types=['dice'])
+def dice(m):
+    cid = m.chat.id
+    uid = m.from_user.id
+
+    g = games.get(cid)
+    if not g or g["status"] != "play":
+        return
+
+    with lock:
+        players = g["players"]
+        if not players:
+            return
+
+        if g["turn_index"] >= len(players):
+            g["turn_index"] = 0
+
+        current_uid = players[g["turn_index"]]
+        if uid != current_uid:
+            return
+
+        # بررسی ایموجی
+        if m.dice.emoji != GAME_CONFIG[g["game"]]["emoji"]:
+            return
+
+        value = m.dice.value
+
+        # ---------------- WIN ----------------
+        if value in g["win_values"]:
+            winner_name = g["player_names"][uid]
+            g["winners"].append(winner_name)
+
+            # حذف بازیکن
+            g["players"].remove(uid)
+
+            bot.send_message(cid, f"🎉 {winner_name} برنده شد!")
+
+            # =======================
+            # 🔥 حالت ۲ نفره (فقط یک برنده)
+            # =======================
+            if g["initial_count"] == 2:
+                bot.send_message(cid, f"🏆 بازی تمام شد!\n\n🥇 برنده: {winner_name}")
+                games.pop(cid, None)
+                return
+
+            # =======================
+            # 🔥 حالت 3 تا 5 نفره (رتبه‌بندی)
+            # =======================
+            if len(g["players"]) == 0:
+                games.pop(cid, None)
+                return
+
+            if len(g["players"]) == 1:
+                last = g["player_names"][g["players"][0]]
+                g["winners"].append(last)
+
+                result = "🏁 پایان بازی!\n\n📊 رتبه‌بندی:\n\n"
+                for i, n in enumerate(g["winners"], 1):
+                    result += f"{i}. {n}\n"
+
+                bot.send_message(cid, result)
+                games.pop(cid, None)
+                return
+
+        # ---------------- TURN FIX ----------------
+        if len(g["players"]) > 0:
+            g["turn_index"] %= len(g["players"])
+
+        else:
+            return
+
+        if value not in g["win_values"]:
+            g["turn_index"] = (g["turn_index"] + 1) % len(g["players"])
+
+        next_player = g["players"][g["turn_index"]]
+        bot.send_message(cid, f"👉 نوبت: {g['player_names'][next_player]}")
+
+
 bot.infinity_polling()
+    
