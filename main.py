@@ -222,5 +222,5 @@ def dice(m):
         next_player = g["players"][g["turn_index"]]  
         bot.send_message(cid, f"👉 نوبت: {g['player_names'][next_player]}")
 
-bot.infinity_polling()
+bot.infinity_polling() 
             
