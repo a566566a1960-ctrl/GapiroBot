@@ -1,3 +1,18 @@
+from flask import Flask
+from threading import Thread
+
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    app.run(host='0.0.0.0', port=8000)
+
+# این را قبل از شروع اجرای اصلی ربات تلگرام قرار دهید
+t = Thread(target=run)
+t.start()
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import threading
